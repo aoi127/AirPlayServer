@@ -119,6 +119,9 @@ public:
 
 	// Auto-fullscreen when a viewer connects (persisted in settings).
 	bool IsAutoFullscreenOnConnect() const { return m_autoFullscreenOnConnect; }
+	bool ShouldMinimizeOnClose() const { return m_minimizeOnClose; }
+	bool ConsumeQuitRequest();
+	void RequestQuit() { m_quitRequested = true; }
 	void ToggleOverlay() {
 		m_overlayState = m_overlayState == OVERLAY_EXPANDED
 			? OVERLAY_HIDDEN : OVERLAY_EXPANDED;
@@ -179,6 +182,13 @@ private:
 
 	// Auto-fullscreen when a viewer connects (opt-in, persisted to ini).
 	bool m_autoFullscreenOnConnect;
+
+	// Launch at Windows sign-in (per-user Run registry value).
+	bool m_autoStartEnabled;
+
+	// Close button minimizes to the taskbar instead of exiting.
+	bool m_minimizeOnClose;
+	bool m_quitRequested;
 
 	// Audio controls
 	float m_deviceVolume;        // Volume from AirPlay device (0.0 to 1.0)

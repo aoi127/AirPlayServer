@@ -6,6 +6,7 @@
 #include <new>
 #include "CAutoLock.h"
 #include "resource.h"
+#include <shellapi.h>
 
 // Windows Core Audio API for querying system audio device format
 #include <mmdeviceapi.h>
@@ -40,6 +41,10 @@ namespace {
 	constexpr DWORD NATIVE_RESIZE_FRAME_INTERVAL_MS = 16;
 	constexpr UINT_PTR NATIVE_RESIZE_TIMER_ID = 0x41525052;
 	const wchar_t NATIVE_RESIZE_PLAYER_PROPERTY[] = L"AirPlayReceiver.NativeResizePlayer";
+	constexpr UINT WM_TRAYICON = WM_APP + 1;
+	constexpr UINT TRAY_ICON_ID = 1;
+	constexpr UINT TRAY_MENU_OPEN = 1;
+	constexpr UINT TRAY_MENU_QUIT = 2;
 	constexpr DWORD PIN_APPROVAL_TIMEOUT_MS = 60000;
 	constexpr DWORD PIN_PRIVACY_DELAY_MS = 1000;
 	enum EPinApprovalState
@@ -106,6 +111,9 @@ namespace {
 			NATIVE_RESIZE_PLAYER_PROPERTY);
 		if (player == NULL || player->m_originalWindowProc == NULL) {
 			return DefWindowProcW(window, message, wParam, lParam);
+		}
+		if (message == WM_TRAYICON) {
+			return player->handleTrayMessage(wParam, lParam);
 		}
 		if (player->m_bPictureInPicture && message == WM_NCHITTEST) {
 			return player->pictureInPictureHitTest(window, lParam);
@@ -290,6 +298,9 @@ CSDLPlayer::CSDLPlayer()
 	, m_lastNativeResizeRenderTime(0)
 	, m_bWindowVisible(false)
 	, m_bMainWindowMinimized(false)
+	, m_startMinimized(false)
+	, m_startHidden(false)
+	, m_trayIconAdded(false)
 	, m_bResizing(false)
 	, m_pendingResizeWidth(800)
 	, m_pendingResizeHeight(600)
@@ -458,6 +469,7 @@ bool CSDLPlayer::init()
 		ApplyNativeWindowTheme(m_hwnd);
 		ApplyNativeWindowIcon(m_hwnd);
 		installNativeResizeHook();
+		addTrayIcon();
 	}
 
 	// Initialize ImGui with SDL2 backends
@@ -493,6 +505,10 @@ bool CSDLPlayer::init()
 
 	// Start with window visible to show home screen
 	showWindow();
+	if (m_startHidden) {
+		// --tray autostart: stay in the notification area until a device connects.
+		hideWindow();
+	}
 
 	// Auto-start the server (server name should be set before init() is called).
 	// The PIN is short-lived and memory-only; settings only remember whether it
@@ -675,6 +691,16 @@ void CSDLPlayer::setServerName(const char* serverName)
 	}
 }
 
+void CSDLPlayer::setStartMinimized(bool minimized)
+{
+	m_startMinimized = minimized;
+}
+
+void CSDLPlayer::setStartHidden(bool hidden)
+{
+	m_startHidden = hidden;
+}
+
 void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 {
 	if (InterlockedCompareExchange(&m_shuttingDown, 0, 0) != 0) {
@@ -790,6 +816,8 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 	} else if (!m_bConnected && connected) {
 		m_bDisconnecting = false;
 		InterlockedExchange(&m_zoomResetPending, 1);
+		// A hidden or minimized receiver becomes visible for the session.
+		showWindowFromTray();
 		if (m_imgui.IsAutoFullscreenOnConnect() && !m_bFullscreen) {
 			// Connection changes are applied on the SDL thread, so fullscreen state
 			// can be changed here without touching the window from the network callback.
@@ -855,6 +883,7 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 void CSDLPlayer::unInit()
 {
 	stopServerForShutdown();
+	removeTrayIcon();
 	unInitVideo();
 	unInitAudio();
 	if (m_panCursor != NULL) {
@@ -1335,6 +1364,12 @@ void CSDLPlayer::loopEvents()
 				break;
 			}
 			case SDL_QUIT: {
+				if (m_imgui.ShouldMinimizeOnClose()) {
+					// Close hides the window to the notification area; the
+					// receiver keeps running until Quit is chosen explicitly.
+					hideWindow();
+					break;
+				}
 				printf("Quit requested, quitting.\n");
 
 				// Save settings before shutdown
@@ -1348,6 +1383,13 @@ void CSDLPlayer::loopEvents()
 			}
 		} // End of event polling loop
 		if (bEndLoop) {
+			break;
+		}
+		if (m_imgui.ConsumeQuitRequest()) {
+			// Explicit Quit from the settings window always exits.
+			saveSettings();
+			stopServerForShutdown();
+			bEndLoop = TRUE;
 			break;
 		}
 
@@ -2094,6 +2136,11 @@ void CSDLPlayer::initVideo(int width, int height)
 		return;
 	}
 	SDL_SetWindowMinimumSize(m_window, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
+
+	if (m_startMinimized) {
+		// Autostart launches stay in the taskbar until a device connects.
+		SDL_MinimizeWindow(m_window);
+	}
 
 	// Create GPU-accelerated renderer (no VSync - minimizes frame latency)
 	m_renderer = SDL_CreateRenderer(m_window, -1,
@@ -3380,6 +3427,87 @@ void CSDLPlayer::showWindow()
 		m_bMainWindowMinimized = false;
 		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
 	}
+}
+
+void CSDLPlayer::addTrayIcon()
+{
+	if (m_hwnd == NULL || m_trayIconAdded) {
+		return;
+	}
+	NOTIFYICONDATAW nid = {};
+	nid.cbSize = sizeof(nid);
+	nid.hWnd = m_hwnd;
+	nid.uID = TRAY_ICON_ID;
+	nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+	nid.uCallbackMessage = WM_TRAYICON;
+	nid.hIcon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDI_APP_ICON),
+		IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+	wcscpy_s(nid.szTip, L"AirPlay Receiver");
+	Shell_NotifyIconW(NIM_ADD, &nid);
+	if (nid.hIcon != NULL) {
+		DestroyIcon(nid.hIcon);
+	}
+	m_trayIconAdded = true;
+}
+
+void CSDLPlayer::removeTrayIcon()
+{
+	if (!m_trayIconAdded) {
+		return;
+	}
+	NOTIFYICONDATAW nid = {};
+	nid.cbSize = sizeof(nid);
+	nid.hWnd = m_hwnd;
+	nid.uID = TRAY_ICON_ID;
+	Shell_NotifyIconW(NIM_DELETE, &nid);
+	m_trayIconAdded = false;
+}
+
+void CSDLPlayer::showWindowFromTray()
+{
+	if (m_window == NULL) {
+		return;
+	}
+	if (!m_bWindowVisible) {
+		showWindow();
+	}
+	if (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) {
+		SDL_RestoreWindow(m_window);
+	}
+	SDL_RaiseWindow(m_window);
+}
+
+LRESULT CSDLPlayer::handleTrayMessage(WPARAM wParam, LPARAM lParam)
+{
+	switch (LOWORD(lParam)) {
+	case WM_LBUTTONUP:
+		showWindowFromTray();
+		return 0;
+	case WM_RBUTTONUP: {
+		HMENU menu = CreatePopupMenu();
+		if (menu == NULL) {
+			return 0;
+		}
+		AppendMenuW(menu, MF_STRING, TRAY_MENU_OPEN, L"Open");
+		AppendMenuW(menu, MF_STRING, TRAY_MENU_QUIT, L"Quit");
+		POINT point = {};
+		GetCursorPos(&point);
+		SetForegroundWindow(m_hwnd);
+		UINT command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+			point.x, point.y, 0, m_hwnd, NULL);
+		DestroyMenu(menu);
+		PostMessageW(m_hwnd, WM_NULL, 0, 0);
+		if (command == TRAY_MENU_OPEN) {
+			showWindowFromTray();
+		} else if (command == TRAY_MENU_QUIT) {
+			m_imgui.RequestQuit();
+		}
+		return 0;
+	}
+	default:
+		break;
+	}
+	return 0;
 }
 
 void CSDLPlayer::hideWindow()

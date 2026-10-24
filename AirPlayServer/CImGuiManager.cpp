@@ -33,6 +33,44 @@ namespace {
 	const int MAX_RECEIVER_WIDTH = 7680;
 	const int MAX_RECEIVER_HEIGHT = 4320;
 
+	const char* const AUTO_START_RUN_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+	const char* const AUTO_START_VALUE_NAME = "AirPlayServer";
+
+	bool QueryAutoStartEnabled()
+	{
+		HKEY key = NULL;
+		if (RegOpenKeyExA(HKEY_CURRENT_USER, AUTO_START_RUN_KEY, 0,
+			KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) {
+			return false;
+		}
+		char value[MAX_PATH * 2] = { 0 };
+		DWORD size = sizeof(value);
+		bool enabled = RegQueryValueExA(key, AUTO_START_VALUE_NAME, NULL, NULL,
+			reinterpret_cast<LPBYTE>(value), &size) == ERROR_SUCCESS && value[0] != '\0';
+		RegCloseKey(key);
+		return enabled;
+	}
+
+	void ApplyAutoStart(bool enabled)
+	{
+		HKEY key = NULL;
+		if (RegCreateKeyExA(HKEY_CURRENT_USER, AUTO_START_RUN_KEY, 0, NULL, 0,
+			KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS) {
+			return;
+		}
+		if (enabled) {
+			char path[MAX_PATH] = { 0 };
+			char command[MAX_PATH + 16] = { 0 };
+			GetModuleFileNameA(NULL, path, MAX_PATH);
+			_snprintf_s(command, sizeof(command), _TRUNCATE, "\"%s\" --tray", path);
+			RegSetValueExA(key, AUTO_START_VALUE_NAME, 0, REG_SZ,
+				reinterpret_cast<const BYTE*>(command), (DWORD)strlen(command) + 1);
+		} else {
+			RegDeleteValueA(key, AUTO_START_VALUE_NAME);
+		}
+		RegCloseKey(key);
+	}
+
 	float Clamp01(float value)
 	{
 		if (value < 0.0f) return 0.0f;
@@ -267,6 +305,9 @@ CImGuiManager::CImGuiManager()
 	, m_screenCastHideInterface(true)
 	, m_screenCastCropToVideo(true)
 	, m_autoFullscreenOnConnect(false)
+	, m_autoStartEnabled(false)
+	, m_minimizeOnClose(false)
+	, m_quitRequested(false)
 	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
 	, m_localVolume(1.0f)      // Default 100% local volume
 	, m_bAutoAdjust(false)     // Auto-adjust off by default
@@ -804,6 +845,19 @@ void CImGuiManager::RenderSettingsPopup()
 		// Persisted with the other viewer settings on shutdown.
 	}
 	ShowTooltip("Automatically use borderless fullscreen for each new AirPlay session");
+	if (ImGui::Checkbox("Hide to system tray when closing the window", &m_minimizeOnClose)) {
+		// Persisted with the other viewer settings.
+	}
+	ShowTooltip("The X button hides the window to the system tray; use Quit in this window or the tray menu to exit");
+
+	ImGui::Spacing();
+	ImGui::Separator();
+	ImGui::Spacing();
+	ImGui::TextColored(UI_TEXT_SECONDARY, "Startup");
+	if (ImGui::Checkbox("Start AirPlay Server when you sign in", &m_autoStartEnabled)) {
+		ApplyAutoStart(m_autoStartEnabled);
+	}
+	ShowTooltip("Launch the receiver at Windows sign-in for the current user");
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -812,7 +866,14 @@ void CImGuiManager::RenderSettingsPopup()
 	RenderRequirePinSetting(ImGui::GetContentRegionAvail().x, m_dpiScale);
 
 	ImGui::Spacing();
-	if (ImGui::Button("Close", ImVec2(-1.0f, 0.0f))) {
+	float buttonWidth = (ImGui::GetContentRegionAvail().x -
+		ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+	if (ImGui::Button("Quit", ImVec2(buttonWidth, 0.0f))) {
+		m_quitRequested = true;
+		ImGui::CloseCurrentPopup();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Close", ImVec2(buttonWidth, 0.0f))) {
 		m_bEditingDeviceName = false;
 		ImGui::CloseCurrentPopup();
 	}
@@ -1716,6 +1777,13 @@ const char* CImGuiManager::GetDeviceName() const
 	return m_deviceNameBuffer[0] ? m_deviceNameBuffer : NULL;
 }
 
+bool CImGuiManager::ConsumeQuitRequest()
+{
+	bool requested = m_quitRequested;
+	m_quitRequested = false;
+	return requested;
+}
+
 void CImGuiManager::LoadSettings(const char* iniPath)
 {
 	// Load device name
@@ -1732,6 +1800,11 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	}
 	m_autoFullscreenOnConnect =
 		GetPrivateProfileIntA("General", "AutoFullscreenOnConnect", 0, iniPath) != 0;
+
+	// The sign-in option mirrors the per-user Run registry value so manual
+	// changes outside the app are reflected in the checkbox.
+	m_autoStartEnabled = QueryAutoStartEnabled();
+	m_minimizeOnClose = GetPrivateProfileIntA("General", "MinimizeOnClose", 0, iniPath) != 0;
 	m_matchReceiverMonitor =
 		GetPrivateProfileIntA("Display", "MatchReceiverMonitor", 1, iniPath) != 0;
 	m_customReceiverWidth = ClampReceiverDimension(
@@ -1807,6 +1880,8 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 	WritePrivateProfileStringA("General", "QualityPreset", buf, iniPath);
 	WritePrivateProfileStringA("General", "AutoFullscreenOnConnect",
 		m_autoFullscreenOnConnect ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("General", "MinimizeOnClose",
+		m_minimizeOnClose ? "1" : "0", iniPath);
 	WritePrivateProfileStringA("Display", "MatchReceiverMonitor",
 		m_matchReceiverMonitor ? "1" : "0", iniPath);
 	char displayBuf[16];
