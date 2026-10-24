@@ -771,7 +771,11 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 
 	if (m_bConnected && !connected) {
 		// Transitioning from connected to disconnected
+		unInitAudio();
 		setPictureInPictureMode(false);
+		if (m_bFullscreen) {
+			toggleFullscreen();
+		}
 		m_cleanFeed.Hide();
 		setCapturePrivacyMode(false);
 		m_bDisconnecting = true;
@@ -3463,6 +3467,24 @@ void CSDLPlayer::removeTrayIcon()
 	m_trayIconAdded = false;
 }
 
+void CSDLPlayer::bringWindowToFront()
+{
+	if (m_hwnd == NULL) {
+		return;
+	}
+	if (IsIconic(m_hwnd)) {
+		ShowWindow(m_hwnd, SW_RESTORE);
+	}
+	// SDL_RaiseWindow alone loses to the Windows foreground lock when another
+	// app owns the foreground. A brief topmost cycle lifts the window above
+	// existing windows, then SetForegroundWindow requests input focus.
+	SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+	SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+		SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+	SetForegroundWindow(m_hwnd);
+}
+
 void CSDLPlayer::showWindowFromTray()
 {
 	if (m_window == NULL) {
@@ -3475,6 +3497,7 @@ void CSDLPlayer::showWindowFromTray()
 		SDL_RestoreWindow(m_window);
 	}
 	SDL_RaiseWindow(m_window);
+	bringWindowToFront();
 }
 
 LRESULT CSDLPlayer::handleTrayMessage(WPARAM wParam, LPARAM lParam)

@@ -68,6 +68,7 @@ public:
 	void addTrayIcon();
 	void removeTrayIcon();
 	void showWindowFromTray();
+	void bringWindowToFront();
 	LRESULT handleTrayMessage(WPARAM wParam, LPARAM lParam);
 
 	// SDL2 window, renderer, and textures (GPU-accelerated)

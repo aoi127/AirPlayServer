@@ -111,9 +111,14 @@ void CAirServerCallback::videoGeometryChanged(float sourceWidth, float sourceHei
 void CAirServerCallback::videoSenderPausedChanged(bool paused,
 	const char* remoteName, const char* remoteDeviceId)
 {
-	UNREFERENCED_PARAMETER(paused);
-	UNREFERENCED_PARAMETER(remoteName);
-	UNREFERENCED_PARAMETER(remoteDeviceId);
+	DebugLogger::Write("connection", "video sender %s name=%s device=%s",
+		paused ? "paused" : "resumed", remoteName ? remoteName : "(null)",
+		remoteDeviceId ? remoteDeviceId : "(null)");
+	if (m_pPlayer) {
+		// The sender can keep the network session alive while paused for a later
+		// resume. Retire its last frame and show the home UI until it resumes.
+		m_pPlayer->setConnected(!paused, remoteName);
+	}
 }
 
 void CAirServerCallback::videoPlay(char* url, double volume, double startPos)
