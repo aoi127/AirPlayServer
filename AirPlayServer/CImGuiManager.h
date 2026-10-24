@@ -97,6 +97,7 @@ public:
 
 	// Get edited device name
 	const char* GetDeviceName() const;
+	static bool IsDeviceNameValid(const char* name);
 	bool IsAirPlayPinEnabled() const { return m_airPlayPinEnabled; }
 	bool ShouldProtectPinFromCapture() const { return m_protectPinFromCapture; }
 	bool ShouldMatchReceiverMonitor() const { return m_matchReceiverMonitor; }
@@ -120,6 +121,7 @@ public:
 	// Auto-fullscreen when a viewer connects (persisted in settings).
 	bool IsAutoFullscreenOnConnect() const { return m_autoFullscreenOnConnect; }
 	bool ShouldMinimizeOnClose() const { return m_minimizeOnClose; }
+	bool ShouldHideToTrayOnDisconnect() const { return m_hideToTrayOnDisconnect; }
 	bool ConsumeQuitRequest();
 	void RequestQuit() { m_quitRequested = true; }
 	void ToggleOverlay() {
@@ -186,8 +188,9 @@ private:
 	// Launch at Windows sign-in (per-user Run registry value).
 	bool m_autoStartEnabled;
 
-	// Close button minimizes to the taskbar instead of exiting.
+	// Close and disconnect visibility preferences (both opt-in).
 	bool m_minimizeOnClose;
+	bool m_hideToTrayOnDisconnect;
 	bool m_quitRequested;
 
 	// Audio controls

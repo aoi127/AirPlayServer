@@ -685,6 +685,9 @@ void CSDLPlayer::renderPinApprovalPopup(LONG& lastGeneration)
 void CSDLPlayer::setServerName(const char* serverName)
 {
 	if (serverName != NULL && strlen(serverName) > 0) {
+		if (!CImGuiManager::IsDeviceNameValid(serverName)) {
+			serverName = "AirPlay Receiver";
+		}
 		strncpy_s(m_serverName, sizeof(m_serverName), serverName, _TRUNCATE);
 	} else {
 		m_serverName[0] = '\0';
@@ -778,6 +781,9 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 		}
 		m_cleanFeed.Hide();
 		setCapturePrivacyMode(false);
+		if (m_imgui.ShouldHideToTrayOnDisconnect()) {
+			hideWindow();
+		}
 		m_bDisconnecting = true;
 		m_bShowPerfGraphs = false;
 		m_dwDisconnectStartTime = GetTickCount();

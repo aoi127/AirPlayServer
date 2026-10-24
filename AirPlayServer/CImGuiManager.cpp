@@ -95,6 +95,20 @@ namespace {
 		return value & ~1;
 	}
 
+	bool IsChineseCodePoint(unsigned int codePoint)
+	{
+		return (codePoint >= 0x3400 && codePoint <= 0x4DBF) ||
+			(codePoint >= 0x4E00 && codePoint <= 0x9FFF) ||
+			(codePoint >= 0xF900 && codePoint <= 0xFAFF) ||
+			(codePoint >= 0x20000 && codePoint <= 0x2FA1F) ||
+			(codePoint >= 0x30000 && codePoint <= 0x323AF);
+	}
+
+	int FilterReceiverNameCharacter(ImGuiInputTextCallbackData* data)
+	{
+		return IsChineseCodePoint(data->EventChar) ? 1 : 0;
+	}
+
 	const char* FindFirstFont(const char* const* paths, int count)
 	{
 		for (int i = 0; i < count; ++i) {
@@ -117,6 +131,29 @@ namespace {
 		config.PixelSnapV = false;
 		config.RasterizerMultiply = 1.0f;
 		return io.Fonts->AddFontFromFileTTF(path, size, &config, NULL);
+	}
+
+	void LoadChineseGlyphs(ImGuiIO& io, ImFont* font, float size)
+	{
+		if (font == NULL) return;
+		const char* chinesePaths[] = {
+			"C:\\Windows\\Fonts\\msyh.ttc",
+			"C:\\Windows\\Fonts\\simhei.ttf",
+			"C:\\Windows\\Fonts\\simsun.ttc"
+		};
+		const char* path = FindFirstFont(chinesePaths, 3);
+		if (path == NULL) return;
+		ImFontConfig config;
+		config.Flags = ImFontFlags_NoLoadError;
+		config.OversampleH = 3;
+		config.OversampleV = 2;
+		config.PixelSnapH = false;
+		config.PixelSnapV = false;
+		config.RasterizerMultiply = 1.0f;
+		config.MergeMode = true;
+		config.DstFont = font;
+		io.Fonts->AddFontFromFileTTF(path, size, &config,
+			io.Fonts->GetGlyphRangesChineseFull());
 	}
 
 	void SetNextWindowPosConstrained(const char* windowName,
@@ -307,6 +344,7 @@ CImGuiManager::CImGuiManager()
 	, m_autoFullscreenOnConnect(false)
 	, m_autoStartEnabled(false)
 	, m_minimizeOnClose(false)
+	, m_hideToTrayOnDisconnect(false)
 	, m_quitRequested(false)
 	, m_deviceVolume(0.5f)     // Default 50% (will be updated by device)
 	, m_localVolume(1.0f)      // Default 100% local volume
@@ -468,8 +506,11 @@ void CImGuiManager::RebuildFonts()
 		defaultConfig.SizePixels = 15.0f * m_dpiScale;
 		m_pFontBody = io.Fonts->AddFontDefault(&defaultConfig);
 	}
+	LoadChineseGlyphs(io, m_pFontBody, 15.0f * m_dpiScale);
 	m_pFontHeading = LoadUiFont(io, FindFirstFont(emphasisPaths, 3), 17.0f * m_dpiScale);
+	LoadChineseGlyphs(io, m_pFontHeading, 17.0f * m_dpiScale);
 	m_pFontTitle = LoadUiFont(io, FindFirstFont(titlePaths, 3), 25.0f * m_dpiScale);
+	LoadChineseGlyphs(io, m_pFontTitle, 25.0f * m_dpiScale);
 	m_pFontPin = LoadUiFont(io, FindFirstFont(titlePaths, 3), 52.0f * m_dpiScale);
 	m_pFontMono = LoadUiFont(io, FindFirstFont(monoPaths, 2), 13.0f * m_dpiScale);
 	if (m_pFontHeading == NULL) m_pFontHeading = m_pFontBody;
@@ -774,7 +815,8 @@ void CImGuiManager::RenderSettingsPopup()
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(10.0f * m_dpiScale, 11.0f * m_dpiScale));
 	if (ImGui::InputText("##ReceiverName", m_deviceNameBuffer, sizeof(m_deviceNameBuffer),
-		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll)) {
+		ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll |
+		ImGuiInputTextFlags_CallbackCharFilter, FilterReceiverNameCharacter)) {
 		m_bEditingDeviceName = false;
 	}
 	ImGui::PopStyleVar();
@@ -782,6 +824,8 @@ void CImGuiManager::RenderSettingsPopup()
 	m_bEditingDeviceName = ImGui::IsItemActive();
 	ImGui::TextColored(UI_TEXT_MUTED,
 		"Shown in Screen Mirroring. Changes apply automatically when disconnected.");
+	ImGui::TextColored(IsDeviceNameValid(m_deviceNameBuffer) ? UI_TEXT_MUTED : UI_ERROR,
+		"Chinese characters are not supported in receiver names.");
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -843,6 +887,8 @@ void CImGuiManager::RenderSettingsPopup()
 		// Persisted with the other viewer settings.
 	}
 	ShowTooltip("The X button hides the window to the system tray; use Quit in this window or the tray menu to exit");
+	ImGui::Checkbox("Hide to system tray after disconnecting", &m_hideToTrayOnDisconnect);
+	ShowTooltip("Keep the receiver running in the system tray when an AirPlay session ends");
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -1768,7 +1814,40 @@ void CImGuiManager::RenderDisconnectMessage(const char* deviceName, float visibi
 }
 const char* CImGuiManager::GetDeviceName() const
 {
-	return m_deviceNameBuffer[0] ? m_deviceNameBuffer : NULL;
+	return m_deviceNameBuffer[0] && IsDeviceNameValid(m_deviceNameBuffer)
+		? m_deviceNameBuffer : NULL;
+}
+
+bool CImGuiManager::IsDeviceNameValid(const char* name)
+{
+	if (name == NULL || name[0] == '\0') {
+		return true;
+	}
+
+	wchar_t wideName[256];
+	int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+		name, -1, wideName, 256);
+	if (length <= 0) {
+		return false;
+	}
+
+	for (int i = 0; i < length - 1; ++i) {
+		unsigned int codePoint = wideName[i];
+		if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+			if (i + 1 >= length - 1 ||
+				wideName[i + 1] < 0xDC00 || wideName[i + 1] > 0xDFFF) {
+				return false;
+			}
+			codePoint = 0x10000 + ((codePoint - 0xD800) << 10) +
+				(wideName[++i] - 0xDC00);
+		} else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+			return false;
+		}
+		if (IsChineseCodePoint(codePoint)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 bool CImGuiManager::ConsumeQuitRequest()
@@ -1783,7 +1862,7 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	// Load device name
 	char buf[256] = { 0 };
 	GetPrivateProfileStringA("General", "DeviceName", "", buf, sizeof(buf), iniPath);
-	if (strlen(buf) > 0) {
+	if (strlen(buf) > 0 && IsDeviceNameValid(buf)) {
 		strncpy_s(m_deviceNameBuffer, sizeof(m_deviceNameBuffer), buf, _TRUNCATE);
 	}
 
@@ -1799,6 +1878,8 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	// changes outside the app are reflected in the checkbox.
 	m_autoStartEnabled = QueryAutoStartEnabled();
 	m_minimizeOnClose = GetPrivateProfileIntA("General", "MinimizeOnClose", 0, iniPath) != 0;
+	m_hideToTrayOnDisconnect =
+		GetPrivateProfileIntA("General", "HideToTrayOnDisconnect", 0, iniPath) != 0;
 	m_matchReceiverMonitor =
 		GetPrivateProfileIntA("Display", "MatchReceiverMonitor", 1, iniPath) != 0;
 	m_customReceiverWidth = ClampReceiverDimension(
@@ -1858,8 +1939,10 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 void CImGuiManager::SaveSettings(const char* iniPath)
 {
 	// Save device name
-	WritePrivateProfileStringA("General", "DeviceName",
-		m_deviceNameBuffer[0] ? m_deviceNameBuffer : "", iniPath);
+	if (IsDeviceNameValid(m_deviceNameBuffer)) {
+		WritePrivateProfileStringA("General", "DeviceName",
+			m_deviceNameBuffer[0] ? m_deviceNameBuffer : "", iniPath);
+	}
 
 	WritePrivateProfileStringA("Security", "RequirePin",
 		m_airPlayPinEnabled ? "1" : "0", iniPath);
@@ -1876,6 +1959,8 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 		m_autoFullscreenOnConnect ? "1" : "0", iniPath);
 	WritePrivateProfileStringA("General", "MinimizeOnClose",
 		m_minimizeOnClose ? "1" : "0", iniPath);
+	WritePrivateProfileStringA("General", "HideToTrayOnDisconnect",
+		m_hideToTrayOnDisconnect ? "1" : "0", iniPath);
 	WritePrivateProfileStringA("Display", "MatchReceiverMonitor",
 		m_matchReceiverMonitor ? "1" : "0", iniPath);
 	char displayBuf[16];
