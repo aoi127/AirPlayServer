@@ -731,27 +731,21 @@ void CImGuiManager::RenderRequirePinSetting(float contentWidth, float scale)
 			"Require PIN");
 	}
 	ShowTooltip("Ask for approval before showing a 4-digit PIN for a new connection");
-	float pinToggleBottom = ImGui::GetItemRectMax().y - ImGui::GetWindowPos().y;
 
 	if (m_airPlayPinEnabled) {
-		ImGui::SetCursorPos(ImVec2(contentX, pinToggleBottom + 6.0f * scale));
 		ImGui::PushTextWrapPos(contentX + contentWidth);
 		ImGui::TextColored(UI_TEXT_MUTED,
 			"New connections need your approval. After you allow one, this app shows a 4-digit PIN.");
 		ImGui::PopTextWrapPos();
-		float pinHelpBottom = ImGui::GetItemRectMax().y - ImGui::GetWindowPos().y;
-		ImGui::SetCursorPos(ImVec2(contentX, pinHelpBottom + 4.0f * scale));
 		ImGui::PushTextWrapPos(contentX + contentWidth);
 		ImGui::TextColored(UI_WARNING,
 			"Warning: PIN approval is unreliable with MacBooks/macOS.");
 		ImGui::PopTextWrapPos();
-		ImGui::SetCursorPosX(contentX);
 		if (ImGui::Checkbox("Hide PIN from screen capture", &m_protectPinFromCapture)) {
 			// Persisted with the other security settings on shutdown.
 		}
 		ShowTooltip("Exclude the receiver window from recording before showing the PIN locally");
 	} else {
-		ImGui::SetCursorPos(ImVec2(contentX, pinToggleBottom + 5.0f * scale));
 		ImGui::TextColored(UI_TEXT_MUTED, "Off - devices on your network can connect.");
 	}
 }
