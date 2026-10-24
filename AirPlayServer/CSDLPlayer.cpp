@@ -893,6 +893,19 @@ void CSDLPlayer::loopEvents()
 	unsigned int activeDisplayHeight = pendingDisplayHeight;
 	LONG lastPinApprovalGeneration = 0;
 
+	auto saveSettings = [this]() {
+		char settingsPath[MAX_PATH] = { 0 };
+		GetModuleFileNameA(NULL, settingsPath, MAX_PATH);
+		char* lastSlash = strrchr(settingsPath, '\\');
+		if (lastSlash) {
+			strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash + 1 - settingsPath), "airplay_settings.ini");
+		} else {
+			strcpy_s(settingsPath, MAX_PATH, "airplay_settings.ini");
+		}
+		m_imgui.SaveSettings(settingsPath);
+	};
+	DWORD lastSettingsAutoSave = GetTickCount();
+
 	// Initialize cursor hide timer
 	m_lastMouseMoveTime = GetTickCount();
 
@@ -1325,17 +1338,7 @@ void CSDLPlayer::loopEvents()
 				printf("Quit requested, quitting.\n");
 
 				// Save settings before shutdown
-				{
-					char settingsPath[MAX_PATH] = { 0 };
-					GetModuleFileNameA(NULL, settingsPath, MAX_PATH);
-					char* lastSlash = strrchr(settingsPath, '\\');
-					if (lastSlash) {
-						strcpy_s(lastSlash + 1, MAX_PATH - (lastSlash + 1 - settingsPath), "airplay_settings.ini");
-					} else {
-						strcpy_s(settingsPath, MAX_PATH, "airplay_settings.ini");
-					}
-					m_imgui.SaveSettings(settingsPath);
-				}
+				saveSettings();
 
 				// Stop callback producers and release any queued payloads before SDL exits.
 				stopServerForShutdown();
@@ -1417,8 +1420,16 @@ void CSDLPlayer::loopEvents()
 					activeDisplayWidth = pendingDisplayWidth;
 					activeDisplayHeight = pendingDisplayHeight;
 					receiverSettingsPendingRestart = false;
+					saveSettings();
 				}
 			}
+		}
+
+		// Persist remaining GUI settings periodically so a forced exit or
+		// logoff cannot discard changes made since the last clean quit.
+		if (GetTickCount() - lastSettingsAutoSave >= 60000) {
+			saveSettings();
+			lastSettingsAutoSave = GetTickCount();
 		}
 
 		// Apply quality preset as SDL render scale quality hint
